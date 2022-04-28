@@ -1,0 +1,678 @@
+import sys
+import os
+import re
+import time
+import keyword
+
+class ArgInfo:
+    """ Instances of the ArgInfo class store argument properties. """
+
+    name_regex = re.compile('[A-Za-z_]*[0-9A-Za-z_]')
+
+    def __init__(self):
+        self.name = ''
+        self.default_value = ''
+        self.data_type = ''
+        self.count_token = ''
+        self.switch_name_list = []
+
+    def get_switch_name_list(self):
+        return self.switch_name_list
+
+    def set_switch_name_list(self, switch_name_list):
+        # Validate each switch name in the switch name list.
+        for switch_name in switch_name_list:
+            # Strip off up to two leading hyphen characters.
+            if switch_name.startswith('-'):
+                switch_name = switch_name[1:]
+            if switch_name.startswith('-'):
+                switch_name = switch_name[1:]
+            self.validate_name(switch_name)
+        self.switch_name_list = switch_name_list
+
+    def get_name(self):
+        return self.name
+
+    def set_name(self, name):
+        self.validate_name(name)
+        self.name = name
+
+    def get_default_value(self):
+        value = self.default_value
+        if not value:
+            if self.data_type == 'boolean':
+                value = 'False'
+            elif self.data_type == 'int':
+                value = '0'
+            elif self.data_type == 'float':
+                value = '0.0'
+            else:
+                value = "''"
+        return value
+
+    def set_default_value(self, default_value):
+        self.default_value = default_value
+
+    def get_type(self):
+        return self.data_type
+
+    def set_type(self, type):
+        self.data_type = type
+
+    def get_count_token(self):
+        return self.count_token
+
+    def set_count_token(self, count):
+        self.count_token = count
+
+    def supports_multiple_values(self):
+        multiple_values = False
+        token = self.count_token
+        try:
+            i = int(token)
+            if i > 1:
+                multiple_values = True
+        except:
+            if token == '+' or token == '*':
+                multiple_values = True
+
+    def validate_name(self, name):
+        result = ArgInfo.name_regex.match(name)
+        if not result:
+            raise ValueError('Illegal name: %s' % (name))
+
+def positional_argument_count(arg_info_list):
+    """ Return the number of positional arguments and
+        the number of required positional arguments.
+    """
+    positional_arg_count = 0
+    required_positional_arg_count = 0
+    for arg_info in arg_info_list:
+        switch_name_list = arg_info.get_switch_name_list()
+        if len(switch_name_list) == 0:
+            positional_arg_count += 1
+            arg_token = arg_info.get_count_token()
+            if arg_token != '?' and arg_token != '*':
+                required_positional_arg_count += 1
+    return positional_arg_count, required_positional_arg_count
+
+def validate_no_duplicate_switches(arg_info_list):
+    """ Throw an exception if there are any duplicate switch names. """
+    switch_list = []
+    for arg_info in arg_info_list:
+        for switch_name in arg_info.get_switch_name_list():
+            if switch_name in switch_list:
+                raise ValueError('Duplicate switch name %s.' % (switch_name))
+            switch_list.append(switch_name)
+
+def is_integer(s):
+    """ Returns True if and only if the passed string specifies
+        an integer value.
+    """
+    try:
+        x = int(s)
+        is_int = True
+    except ValueError:
+        is_int = False
+    return is_int
+
+def is_floating_point(s):
+    """ Returns True if and only if the passed string specifies
+        a floating point value.
+    """
+    try:
+        x = float(s)
+        is_float = True
+    except ValueError:
+        is_float = False
+    return is_float
+
+def write_program_header(outfile, base_program_name, param_list, has_argparse):
+    """ Writes a program header in the following form:
+
+        #!/usr/bin/env python
+        <three double quotes>
+            python template.py --switch1 <value1> --switch2 <value2>
+        <three double quotes>
+
+        import sys
+    """
+    outfile.write('#!/usr/bin/env python\n')
+    outfile.write('"""\n')
+    outfile.write('    python %s.py\n\n' % (base_program_name))
+    outfile.write('    TODO: Add usage information here.\n')
+    outfile.write('"""\n')
+    outfile.write('import sys\n')
+    outfile.write('# TODO: Uncomment or add imports here.\n')
+    outfile.write('#import os\n')
+    outfile.write('#import re\n')
+    outfile.write('#import time\n')
+    if has_argparse and param_list != None and len(param_list) > 0:
+        outfile.write('from argparse import ArgumentParser\n')
+    outfile.write('#import subprocess\n')
+    outfile.write('\n')
+    return
+
+def get_function_call_string(function_name, param_list):
+    """ Writes a function call, such as:
+        'somename_main(input_file_name)'
+    """
+    function_call = '%s(' % (function_name)
+    number_of_params = len(param_list)
+    for i in xrange(0, number_of_params):
+        function_call = '%s%s' % (function_call, param_list[i])
+        if i != (number_of_params - 1):
+            function_call = '%s, ' % (function_call)
+    function_call = '%s)' % (function_call)
+    return function_call
+
+def write_function_start(outfile, function_name, param_list):
+    """ Writes a function call, such as:
+        'def somename_main(input_file_name):'
+        <three double quotes> TODO: <three double quotes>
+    """
+    if function_name == 'main':
+        outfile.write('# Start of main program.\n')
+    # write the function declaration.
+    function_call = get_function_call_string(function_name, param_list)
+    function_declaration = 'def %s:\n' % (function_call)
+    outfile.write(function_declaration)
+    if function_name != 'main':
+        outfile.write('    """ TODO: Add docstring here. """\n')
+    return
+
+def write_primary_main_function(outfile, base_program_name, param_list):
+    """ Writes a function with the following form:
+
+            <three double quotes> <myprogram>_main
+            <three double quotes>
+            def <myprogram>_main(<argument_list>):
+                # TODO: Add code here.
+                return 0
+    """
+    function_name = '%s_main' % (base_program_name)
+    write_function_start(outfile, function_name, param_list)
+    outfile.write('    # TODO: Add or delete code here.\n')
+    outfile.write('    # Dump all passed argument values.\n')
+    for param in param_list:
+        outfile.write("    print '%s = %ss' %s (repr(%s))\n" % (param, '%', '%', param))
+    # End of test code.
+    outfile.write('    return 0\n\n')
+    return
+
+def get_year():
+    """ Returns a string that contains the year. """
+    now = time.ctime()
+    now_list = now.split()
+    year = now_list[4]
+    return year
+
+def get_default_value_for_type(arg_type):
+    """ Get the argument default value based on the argument type. """
+    # An empty argument type defaults to type 'string'.
+    arg_default_value_dict = {'string' : "''", 'boolean' : 'False', 'int' : '0', 'float' : '0.0'}
+    return arg_default_value_dict[arg_type]
+
+def get_parser_target_value(arg_type, arg_default_value):
+    value = 'invalid'
+    if arg_type == 'boolean':
+        if arg_default_value == 'False':
+            value = 'True'
+        else:
+            value = 'False'
+    elif arg_type == 'int':
+        value = 'int(arg)'
+    elif arg_type == 'float':
+        value = 'float(arg)'
+    else:
+        value = 'arg'
+    return value
+
+def write_argument_parsing_code(outfile, param_info_list, has_argparse):
+    """ Write the argument parsing code. """
+    if has_argparse:
+        write_argparse_argument_parsing_code(outfile, param_info_list)
+    else:
+        write_inline_argument_parsing_code(outfile, param_info_list)
+
+def write_argparse_argument_parsing_code(outfile, param_info_list):
+    """ Write argument parsing code.  The form of the code
+        varies depending on the passed param_info_list, but
+        will be similar to:
+
+        # Initialize the command line parser.
+        parser = ArgumentParser(description='TODO: Text to display before the argument help.',
+                                epilog='TODO: Text to display after the argument help.',
+                                add_help=True,
+                                argument_default=None, # Global argument default
+                                usage=__doc__)
+        parser.add_argument('-s', '--switch1', action='store', dest='value1', required=True,
+                            help='The something1')
+        parser.add_argument('-t', '--switch2', action='store', dest='value2',
+                            help='The something2')
+        parser.add_argument('-b', '--optswitchbool', action='store_true', dest='optboolean1', default=False,
+                            help='Do something')
+        # Parse the command line.
+        args = parser.parse_args()
+        value1 = args.value1
+        value2 = args.value2
+        optboolean1 = args.optboolean1
+"""
+    if len(param_info_list) > 0:
+        outfile.write('    # Initialize the command line parser.\n')
+        outfile.write("    parser = ArgumentParser(description='TODO: Text to display before the argument help.',\n")
+        outfile.write("                            epilog='Copyright (c) %s TODO: your-name-here.',\n" % (get_year()))
+        outfile.write("                            add_help=True,\n")
+        outfile.write("                            argument_default=None, # Global argument default\n")
+        outfile.write("                            usage=__doc__)\n")
+        # For each parameter, write code to add an argument variable to the argument parser.
+        for param_info in param_info_list:
+            # Get the argument data.
+            switch_name_list = param_info.get_switch_name_list()
+            arg_name = param_info.get_name()
+            arg_default_value = param_info.get_default_value()
+            arg_type = param_info.get_type()
+            arg_count = param_info.get_count_token()
+            # Create a string to add the argument to the parser.
+            argument_string = '    parser.add_argument('
+            if len(switch_name_list) > 0:
+                switches_string = repr(switch_name_list)
+                switches_string = switches_string.replace('[', '')
+                switches_string = switches_string.replace(']', '')
+                argument_string = "%s%s," % (argument_string, switches_string)
+            if not argument_string.endswith('('):
+                argument_string = "%s " % (argument_string)
+            if arg_type == 'boolean':
+                if not arg_default_value or arg_default_value == 'False':
+                    argument_string = "%saction='store_true'," % (argument_string)
+                elif arg_default_value == 'True':
+                    argument_string = "%saction='store_false'," % (argument_string)
+            else:
+                argument_string = "%saction='store'," % (argument_string)
+            # Add text to set the argument name.
+            argument_string = "%s dest='%s'," % (argument_string, arg_name)
+            if arg_type == 'int':
+                argument_string = "%s type=int," % (argument_string)
+            elif arg_type == 'float':
+                argument_string = "%s type=float," % (argument_string)
+            elif arg_type != 'boolean':
+                # The default type is 'string'.
+                arg_type = 'string'
+            # If the parameter is not a required parameter, then set a default value.
+            if len(switch_name_list) > 1 or arg_count == '?':
+                # If there is no default value then specify a default value based on the type
+                # of the argument.
+                if not arg_default_value:
+                    arg_default_value = get_default_value_for_type(arg_type)
+                argument_string = '%s default=%s,' % (argument_string, arg_default_value)
+            elif arg_default_value:
+                print "'%s' is a required parameter.  Default argument value '%s' ignored" % (arg_name, arg_default_value)
+                print "Use parameter_count_token '?' to change to a non-required parameter."
+            # Set the optional argument count.
+            if arg_count and arg_count in '*+?':
+                argument_string = "%s nargs='%s'," % (argument_string, arg_count)
+            elif is_integer(arg_count):
+                argument_string = "%s nargs=%s," % (argument_string, int(arg_count))
+            # Add text to set the argument help string.
+            argument_string = "%s help='TODO:')\n" % (argument_string)
+            # Write the line of code that adds the argument to the parser.
+            outfile.write(argument_string)
+        # Write code the parse the arguments
+        outfile.write('    # Parse the command line.\n')
+        outfile.write('    arguments = parser.parse_args(args=argv)\n')
+        # Write code to extract each parameter value from the argument parser.
+        for param_info in param_info_list:
+            arg_name = param_info.get_name()
+            outfile.write("    %s = arguments.%s\n" % (arg_name, arg_name))
+    return
+
+def write_inline_argument_parsing_code(outfile, param_info_list):
+    """ Write argument parsing code in the following form.
+        status = 0
+        # Allow debugging within the Python interpreter.
+        if not argv:
+            argv = sys.argv
+        # Parse arguments.
+        first = ''
+        second = ''
+        has_extra = False
+        pos = 0
+        for arg in argv[1:]:
+            if arg.startswith('-'):
+                if arg == '-h' or arg == '--help':
+                    print __doc__
+                    status = 1
+                elif arg == '-e' or arg == '--extra':
+                    has_extra = True
+                else:
+                    print 'Invalid switch argument: %s - aborting' % (arg)
+                    status = -2
+                    break
+            else:
+                if pos == 0:
+                    first = arg
+                elif pos == 1:
+                    second = arg
+                else:
+                    print 'Too many positional arguments starting at: %s - aborting' % (arg)
+                    status = -2
+                    break
+                pos += 1
+        required_positional_arg_count = 2
+        if pos < required_positional_arg_count:
+            print 'Too few positional arguments supplied. - Aborting.'
+            status = -2
+        # Code continues here.
+    """
+    outfile.write('    status = 0\n')
+    outfile.write('    # Allow debugging within the Python interpreter.\n')
+    outfile.write('    if not argv:\n')
+    outfile.write('        argv = sys.argv\n')
+    outfile.write('    # Parse arguments.\n')
+    # Initialize the argument variables.
+    for param_info in param_info_list:
+        # Get the argument data.
+        arg_name = param_info.get_name()
+        arg_default_value = param_info.get_default_value()
+        if param_info.supports_multiple_values():
+            outfile.write('    %s = []\n' % (arg_name))
+        else:
+            outfile.write('    %s = %s\n' % (arg_name, arg_default_value))
+    # Write the positional argument counter.
+    outfile.write('    pos = 0\n')
+    # Write the code to parse switch arguments.
+    outfile.write('    # Loop over the program arguments.\n')
+    outfile.write('    for arg in argv[1:]:\n')
+    outfile.write("        if arg.startswith('-'):\n")
+    outfile.write("            # This is a switch argument.\n")
+    outfile.write("            if arg == '-h' or arg == '--help':\n")
+    outfile.write('                print __doc__\n')
+    outfile.write('                status = 1\n')
+    # Loop over the switch arguments.
+    for param_info in param_info_list:
+        # Get the argument data.
+        switch_name_list = param_info.get_switch_name_list()
+        arg_name = param_info.get_name()
+        arg_default_value = param_info.get_default_value()
+        arg_type = param_info.get_type()
+        arg_count = param_info.get_count_token()
+        if len(switch_name_list) > 0:
+            statement = '            elif '
+            for switch in switch_name_list:
+                if statement.endswith('elif '):
+                    statement = '%s arg == %s' % (statement, repr(switch))
+                else:
+                    statement = '%s or arg == %s' % (statement, repr(switch))
+            statement = '%s:\n' % (statement)
+            outfile.write(statement)
+            value = get_parser_target_value(arg_type, arg_default_value)
+            if param_info.supports_multiple_values():
+                outfile.write('                %s.append(%s)\n' % (arg_name, value))
+            else:
+                outfile.write('                %s = %s\n' % (arg_name, value))
+    outfile.write('            else:\n')
+    outfile.write("                print 'Invalid switch argument: %ss - aborting' %s (arg)\n" % ('%', '%'))
+    outfile.write('                status = -2\n')
+    outfile.write('                break\n')    
+    outfile.write('        else:\n')
+    # Are there any positional arguments?
+    positional_arg_count, required_positional_arg_count = positional_argument_count(param_info_list)
+    if positional_arg_count > 0:
+        outfile.write("            # This is a positional argument.\n")
+        # Loop over the positional arguments.
+        pos_index = 0
+        for param_info in param_info_list:
+            switch_name_list = param_info.get_switch_name_list()
+            if len(switch_name_list) == 0:
+                arg_name = param_info.get_name()
+                arg_default_value = param_info.get_default_value()
+                arg_type = param_info.get_type()
+                arg_count = param_info.get_count_token()
+                value = get_parser_target_value(arg_type, arg_default_value)
+                if pos_index == 0:
+                    outfile.write('            if pos == %s:\n' % (pos_index))
+                else:
+                    outfile.write('            elif pos == %s:\n' % (pos_index))
+                if param_info.supports_multiple_values():
+                    outfile.write('                %s.append(%s)\n' % (arg_name, value))
+                else:
+                    outfile.write('                %s = %s\n' % (arg_name, value))
+                pos_index += 1
+        outfile.write('            else:\n')
+        outfile.write("                print 'Too many positional arguments starting at: %ss - aborting' %s (arg)\n" % ('%', '%'))
+        outfile.write('                status = -2\n')
+        outfile.write('                break\n')
+        outfile.write('            pos += 1\n')
+        outfile.write('    # Were enough positional arguments supplied?\n')
+        outfile.write('    required_positional_arg_count = %s\n' % (required_positional_arg_count))
+        outfile.write('    if pos < required_positional_arg_count:\n')
+        outfile.write("        print 'Too few positional arguments supplied. - Aborting.'\n")
+        outfile.write('        status = -2\n')
+    else:
+        # There are no positional arguments.
+        outfile.write("                print 'Invalid argument: %ss - aborting' %s (arg)'\n" % ('%', '%'))
+        outfile.write('                status = -2\n')
+        outfile.write('                break\n')
+    return
+
+def write_program_end(outfile,
+                      base_program_name,
+					  param_list,
+					  param_info_list,
+					  has_argparse):
+    """ Writes code with the following form:
+
+        <three double quotes> main
+        <three double quotes>
+        def main():
+            <Argument parsing code here>
+            [primary-main-function call here]
+            return 0
+
+        if __name__ == "__main__":
+            sys.exit(main())
+    """  
+    write_function_start(outfile, 'main', ['argv=None'])
+    if param_list != None and len(param_list) > 0:
+        write_argument_parsing_code(outfile, param_info_list, has_argparse)
+    function_name = '%s_main' % (base_program_name)
+    function_call = get_function_call_string(function_name, param_list)
+    outfile.write('    if status == 0:\n')
+    outfile.write('        try:\n')
+    function_call = '            %s\n' % (function_call)
+    outfile.write('            # Call the primary program function.\n')
+    outfile.write(function_call)
+    outfile.write('        except ValueError, value_error:\n')
+    outfile.write('            print value_error\n')
+    outfile.write('            status = -1\n')
+    outfile.write('        except EnvironmentError, environment_error:\n')
+    outfile.write('            print environment_error\n')
+    outfile.write('            status = -1\n')
+    outfile.write('    return status\n\n')
+    outfile.write('if __name__ == "__main__":\n')
+    outfile.write('    sys.exit(main())\n')
+    return
+
+def write_program(outfile, base_program_name, param_info_list):
+    """ Main function to write the python program. """
+    # Extract just the argument names to a list.
+    param_list = []
+    for param_info in param_info_list:
+        param_list.append(param_info.get_name())
+    # Is the argparse module available?
+    has_argparse = True
+    try:
+        import argparse
+    except:
+        has_argparse = False
+    write_program_header(outfile, base_program_name, param_list, has_argparse)
+    write_primary_main_function(outfile, base_program_name, param_list)
+    write_program_end(outfile,
+	                  base_program_name,
+					  param_list,
+					  param_info_list,
+					  has_argparse)
+
+def file_exists(file_name):
+    """ Return True if and only if the file exists. """
+    exists = True
+    try:
+        f = open(file_name, 'r')
+        f.close()
+    except IOError, io_error:
+        exists = False
+    return exists
+
+def validate_arg_default_value(arg_type, arg_default_value, argument):
+    """ Validate the argument default value based on the argument type. """
+    # An empty argument type defaults to type 'string'.
+    if not arg_type or arg_type == 'string':
+        if arg_default_value:
+            # String default values must begin and end with single quote characters.
+            if not arg_default_value.startswith("'") or not arg_default_value.endswith("'"):
+                arg_default_value = repr(arg_default_value)
+    # If the parameter is a boolean parameter, then the default
+    # value must be either the string value 'False' or 'True'.
+    elif arg_type == 'boolean':
+        if arg_default_value:
+            if arg_default_value != 'False' and arg_default_value != 'True':
+                raise ValueError("Boolean default value %s in %s must be either 'False' or 'True'" % (arg_default_value, argument))
+    elif arg_type == 'int':
+        if arg_default_value and not is_integer(arg_default_value):
+            raise ValueError('Integer default value %s in %s is not a valid number.' % (arg_default_value, argument))
+    else: # arg_type == 'float':
+        if arg_default_value and not is_floating_point(arg_default_value):
+            raise ValueError('Floating point default value %s in %s is not a valid floating point number.' % (arg_default_value, argument))
+    return
+
+def validate_variable_name(arg_name, unique_name_list):
+    """ Validate the variable name. """
+    # Ensure the variable name is not a python keyword.
+    if keyword.iskeyword(arg_name):
+        raise ValueError('Variable name "%s" is a python keyword.' % (arg_name))
+    # Ensure the variable name is unique.
+    if arg_name in unique_name_list:
+        raise ValueError('Variable name "%s" was already specified.' % (arg_name))
+    unique_name_list.append(arg_name)
+
+def create_folder_under_current_directory(folder_name):
+    current_path = os.getcwd()
+    new_path = os.path.join(current_path, folder_name)
+    if not os.path.exists(folder_name):
+        os.makedirs(folder_name)
+    return new_path
+
+# Start of main program.
+def main(argv=None):
+    if argv == None:
+        argv = sys.argv
+    # Set the default return value to indicate success.
+    status = 0
+    # There must be at least one argument that is the program name.
+    if len(argv) < 2:
+        print 'Program: make_python_2_prog.py\nUse -h or --help for more information.'
+        return status
+    # Get the program name or  "-h" or "--help".
+    base_program_name = argv[1]
+    if base_program_name == '-h' or base_program_name == '--help':
+        print __doc__
+        return status
+    program_name = base_program_name
+    # Make sure the base program name does not have the '.py' extension.
+    if base_program_name.endswith('.py'):
+        base_program_name = base_program_name[:-3]
+    # Make sure the base program name is a valid program name.
+    param_info = ArgInfo()
+    try:
+        param_info.validate_name(base_program_name)
+        # Add the file extension '.py'.
+        program_name = '%s.py' % (base_program_name)
+        # Don't allow programs to be created with the same name as this program.
+        lower_case_program_name = program_name.lower()
+        if lower_case_program_name == 'make_python_2_prog.py':
+            raise ValueError('The generated program name cannot be the same name as this program.')
+        # The argument list to this program can start with an optional argument
+        # switch, followed by the argument name followed by the type of the argument,
+        # each separated by a comma character.  The argument type must be one of the
+        # following: 's' for string, 'b' for boolean, 'i' for int, or 'f' for float.
+        arg_type_dict = {'s' : 'string', 'b' : 'boolean', 'i' : 'int', 'f' : 'float'}
+        unique_name_list = []
+        param_info_list = []
+        for i in xrange(2, len(argv)):
+            # Get the current argument string.
+            argument = argv[i].strip()
+            arg_item_list = argument.split(',')
+            # Create a new ArgInfo instance to store the argument settings.
+            param_info = ArgInfo()
+            # Get the argument name and remove it from the list.
+            arg_name = arg_item_list.pop(0)
+            # Check for a default value for the argument name.
+            arg_default_value = ''
+            arg_name_list = arg_name.split('=')
+            if len(arg_name_list) > 1:
+                arg_name = arg_name_list[0]
+                arg_default_value = arg_name_list[1]
+            # Declare optional argument setting variables.
+            arg_switch_list = []
+            arg_count_token = ''
+            arg_type = ''
+            # Loop and parse any optional comma-delimited parameters.
+            for arg_item in arg_item_list:
+                # Does the parameter specify an argument switch?
+                if arg_item.startswith('-'):
+                    arg_switch_list.append(arg_item)
+                    continue
+                # Does the parameter specify an argument count token?
+                elif (len(arg_item) == 1 and arg_item in '*+?') or is_integer(arg_item):
+                    # Was an argument count token already found?
+                    if arg_count_token:
+                        raise ValueError('Argument count token %s in %s is a duplicate count token.' % (arg_item, argument))
+                    arg_count_token = arg_item
+                    continue
+                # Does the parameter specify an argument type?
+                elif (len(arg_item) == 1 and arg_item in 'sbif'):
+                    # Was an argument type already found?
+                    if arg_type:
+                        raise ValueError('Argument type %s in %s is a duplicate type.' % (arg_item, argument))
+                    # Look up the argument type token.
+                    arg_type = arg_type_dict.get(arg_item)
+                    continue
+                # The input is invalid.
+                raise ValueError('Parameter %s contains invalid setting %s.' % (argument, arg_item))
+            # Validate the argument default value and the variable name.
+            validate_arg_default_value(arg_type, arg_default_value, argument)
+            validate_variable_name(arg_name, unique_name_list)
+            # Save the argument parameters.
+            param_info.set_name(arg_name)
+            param_info.set_default_value(arg_default_value)
+            param_info.set_switch_name_list(arg_switch_list)
+            param_info.set_count_token(arg_count_token)
+            param_info.set_type(arg_type)
+            # Add the argument info to the list of arguments.
+            param_info_list.append(param_info)
+        validate_no_duplicate_switches(param_info_list)
+        # If the output file already exists, then prompt the user to overwrite the file.
+        if file_exists(program_name):
+            print "File '%s' already exists. Enter 'y' or 'Y' to overwrite the file. >" % (program_name),
+            c = raw_input()
+            if c != 'y' and c != 'Y':
+                return status
+        # Create a 'base_program_name' folder.
+        new_path = create_folder_under_current_directory(base_program_name)
+        # Change the current working directory to the new folder.
+        os.chdir(new_path)
+        # Open the program file and write the program.
+        outfile = open(program_name, 'w')
+        write_program(outfile, base_program_name, param_info_list)
+        outfile.close()
+        print 'Created program %s' % (program_name)
+    except EnvironmentError, environment_error:
+        print environment_error
+        status = -1
+    except ValueError, value_error:
+        print value_error
+        status = -1
+    return status
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,9 @@
+from selenium import webdriver
+# we are going to use the Chrome Driver so we have used Chrome
+browser = webdriver.Chrome("E:\\chromedriver.exe")
+#Get the website
+browser.get("https://www.google.com")
+#print the page source
+print(browser.page_source)
+#---------close the driver itself
+browser.quit()

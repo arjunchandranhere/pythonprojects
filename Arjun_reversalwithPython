@@ -1,3 +1,6 @@
+# author : Arjun Chandran
+# purpose:reversal of any entered number using a simple code with less than 15 lines
+import os
 class Arjun_Reversal:
     sample_number = int(input("Number to be reversed: "))
     test_number = 0

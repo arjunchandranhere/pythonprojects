@@ -1,3 +1,5 @@
+#Author: Arjun Chandran
+# purpose: Parsing of commands for importing to BRWS
 import sys
 import os
 import re

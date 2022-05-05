@@ -1,3 +1,5 @@
+# Author: Arjun Chandran
+#purpose: importing images and printing the html parser from the website
 import requests
 from bs4 import BeautifulSoup
 
